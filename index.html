@@ -78,6 +78,16 @@
   .team-row.tbd .nm { color: var(--muted); font-style: italic; }
   .pens { font-size: 10px; color: var(--gold); padding: 0 9px 6px; text-align: right; }
 
+  /* Today & Tomorrow */
+  .fx-day { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 16px 2px 9px; display: flex; align-items: baseline; gap: 8px; }
+  .fx-day .when { color: var(--txt); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  .fx-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+  .fx { min-width: 192px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+  .fx.live-card { border-color: var(--accent); }
+  .fx-meta { font-size: 10.5px; color: var(--muted); padding: 6px 9px 2px; display: flex; justify-content: space-between; gap: 8px; }
+  .fx-meta .st-fin { color: var(--accent); }
+  .fx-none { color: var(--muted); font-size: 13px; padding: 4px 2px 2px; }
+
   /* Tables */
   .tbl-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
   table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 540px; }
@@ -149,6 +159,9 @@
       </div>
     </div>
   </details>
+
+  <h2 class="section">Today &amp; Tomorrow <span class="tag" id="fxTag"></span></h2>
+  <div id="fixtures"></div>
 
   <h2 class="section">Knockout Bracket <span class="tag" id="koTag"></span></h2>
   <div class="bracket-scroll"><div class="bracket" id="bracket"></div></div>
@@ -325,7 +338,7 @@ function parse(raw) {
   });
   thirds.sort(cmpTeam);
   thirds.forEach((t, i) => { t.rank = i + 1; t.qualified = i < 8; });
-  return { groupTables, thirds, ko };
+  return { groupTables, thirds, ko, matches };
 }
 
 /* ============================ Rendering (pure -> HTML strings) ============================ */
@@ -418,6 +431,49 @@ function byDate(a, b) {
   return String(a.date).localeCompare(String(b.date)) || String(a.time).localeCompare(String(b.time));
 }
 
+/* ---- Today & Tomorrow fixtures ---- */
+function ymd(dt) { const z = (n) => String(n).padStart(2, "0"); return dt.getFullYear() + "-" + z(dt.getMonth() + 1) + "-" + z(dt.getDate()); }
+function dayLabel(dt) { return dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); }
+// Chronological sort key that respects each match's "UTC±N" offset.
+function utcKey(m) {
+  const mt = (m.time || "").match(/(\d{1,2}):(\d{2})\s*UTC\s*([+-]\d{1,2})?/i);
+  if (!mt) return m.date + " " + (m.time || "");
+  const mins = (+mt[1]) * 60 + (+mt[2]) - (mt[3] ? +mt[3] : 0) * 60;
+  return m.date + " " + String(mins + 10000).padStart(6, "0");
+}
+function stageLabel(m) {
+  if (m.group) return "Group " + m.group;
+  const d = KO_DEFS.find(x => x.key === m.round);
+  return d ? d.name : "";
+}
+function fixtureCard(m) {
+  let hWin = false, aWin = false;
+  if (m.played) {
+    if (m.pens) { hWin = m.pens.h > m.pens.a; aWin = m.pens.a > m.pens.h; }
+    else if (m.hs > m.as) hWin = true; else if (m.as > m.hs) aWin = true;
+  }
+  const status = m.played ? `<span class="st-fin">${m.aet ? (m.pens ? "PENS" : "AET") : "FT"}</span>` : esc(m.time || "TBD");
+  return `<div class="fx">
+      <div class="fx-meta"><span>${esc(stageLabel(m))}</span><span>${status}</span></div>
+      ${teamRow(m.home, m.played ? m.hs : null, hWin)}
+      ${teamRow(m.away, m.played ? m.as : null, aWin)}
+      ${m.pens ? `<div class="pens">pens ${m.pens.h}–${m.pens.a}</div>` : ""}
+    </div>`;
+}
+function fixturesHTML(matches, nowMs) {
+  const today = ymd(new Date(nowMs));
+  const tomorrow = ymd(new Date(nowMs + 86400000));
+  let total = 0;
+  const html = [["Today", today], ["Tomorrow", tomorrow]].map(([label, day]) => {
+    const ms = matches.filter(m => m.date === day).sort((a, b) => utcKey(a).localeCompare(utcKey(b)));
+    total += ms.length;
+    const head = `<div class="fx-day">${label}<span class="when">${dayLabel(new Date(day + "T00:00:00"))}</span></div>`;
+    return head + (ms.length ? `<div class="fx-row">${ms.map(fixtureCard).join("")}</div>`
+                             : `<div class="fx-none">No matches scheduled.</div>`);
+  }).join("");
+  return { html, total };
+}
+
 /* ============================ Mount + loop ============================ */
 const $ = (id) => document.getElementById(id);
 let timer = null;
@@ -428,6 +484,9 @@ function setStatus(kind, text) {
 }
 
 function render(parsed) {
+  const fx = fixturesHTML(parsed.matches, Date.now());
+  $("fixtures").innerHTML = fx.html;
+  $("fxTag").textContent = fx.total ? "scores update live" : "no fixtures in this window";
   const b = bracketHTML(parsed.ko);
   $("bracket").innerHTML = b.html;
   $("koTag").textContent = b.anyKO ? "" : "begins after the group stage — fixtures appear here automatically";
@@ -484,7 +543,7 @@ update();
 
 // Expose pure logic for offline testing (no-op in the browser).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parse, computeGroup, cmpTeam, normalize, roundKeyFromName, bracketHTML, thirdHTML, groupsHTML, isPlaceholder };
+  module.exports = { parse, computeGroup, cmpTeam, normalize, roundKeyFromName, bracketHTML, thirdHTML, groupsHTML, isPlaceholder, fixturesHTML, utcKey };
 }
 </script>
 </body>
