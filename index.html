@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>World Cup 26 — Knockout & Third-Place Tracker</title>
+<style>
+  :root {
+    --bg: #0b1020; --panel: #131a2e; --panel-2: #1a2238; --line: #25304d;
+    --txt: #e7ecf6; --muted: #8a98b8; --accent: #36d399; --accent-dim: #1f6f53;
+    --gold: #f5c451; --red: #f06b6b; --blue: #5b8cff;
+    --shadow: 0 6px 24px rgba(0,0,0,.35); --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #182446 0%, var(--bg) 55%) fixed;
+    color: var(--txt);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.4; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--blue); }
+  .wrap { max-width: 1300px; margin: 0 auto; padding: 20px 18px 80px; }
+
+  header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+  .logo { font-size: 26px; }
+  .title h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+  .title p  { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+  .spacer { flex: 1 1 auto; }
+
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button { background: var(--panel-2); color: var(--txt); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+    transition: border-color .15s, background .15s; white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); }
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+  .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  .status { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); margin: 0 0 18px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .dot.live { background: var(--accent); animation: pulse 2s infinite; }
+  .dot.err  { background: var(--red); }
+  .dot.cache{ background: var(--gold); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(54,211,153,.6)} 70%{box-shadow:0 0 0 7px rgba(54,211,153,0)} 100%{box-shadow:0 0 0 0 rgba(54,211,153,0)} }
+
+  details.settings { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 22px; overflow: hidden; }
+  details.settings > summary { cursor: pointer; padding: 12px 16px; font-size: 13px; color: var(--muted); user-select: none; list-style: none; }
+  details.settings > summary::-webkit-details-marker { display: none; }
+  details.settings > summary::before { content: "⚙  "; }
+  .settings-body { padding: 4px 16px 16px; display: grid; grid-template-columns: 1fr 160px; gap: 14px; }
+  .field label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .4px; }
+  .field input { width: 100%; background: var(--panel-2); border: 1px solid var(--line); color: var(--txt); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .settings-actions { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; }
+  .hint { grid-column: 1/-1; font-size: 12px; color: var(--muted); }
+
+  h2.section { font-size: 15px; margin: 30px 0 14px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  h2.section .tag { font-size: 11px; color: var(--muted); font-weight: 400; }
+
+  /* Bracket */
+  .bracket-scroll { overflow-x: auto; padding-bottom: 10px; }
+  .bracket { display: flex; gap: 20px; min-width: max-content; }
+  .round-col { display: flex; flex-direction: column; min-width: 196px; }
+  .round-col h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    margin: 0 0 10px; text-align: center; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .ties { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; flex: 1; }
+  .tie { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+  .tie.final-tie { border-color: var(--gold); }
+  .tie .meta { font-size: 10.5px; color: var(--muted); padding: 5px 9px 2px; display: flex; justify-content: space-between; }
+  .team-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; font-size: 13px; border-top: 1px solid var(--line); }
+  .team-row:first-of-type { border-top: none; }
+  .team-row .flag { width: 22px; text-align: center; flex: 0 0 auto; font-size: 15px; }
+  .team-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .team-row .sc { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 18px; text-align: right; color: var(--muted); }
+  .team-row.win .nm { color: var(--accent); font-weight: 600; }
+  .team-row.win .sc { color: var(--accent); }
+  .team-row.tbd .nm { color: var(--muted); font-style: italic; }
+  .pens { font-size: 10px; color: var(--gold); padding: 0 9px 6px; text-align: right; }
+
+  /* Tables */
+  .tbl-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 540px; }
+  th, td { padding: 9px 10px; text-align: center; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; background: var(--panel-2); position: sticky; top: 0; }
+  td.team, th.team { text-align: left; }
+  tr:last-child td { border-bottom: none; }
+  .pos { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pts { font-weight: 700; }
+  .flag-cell { display: inline-flex; align-items: center; gap: 8px; }
+  .flag-cell .flag { font-size: 16px; }
+  tr.qual td { background: rgba(54,211,153,.08); }
+  tr.qual .pos::after { content: " ✓"; color: var(--accent); }
+  tr.bubble td { background: rgba(245,196,81,.07); }
+  tr.out td { opacity: .55; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 10px 2px 0; }
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+  /* Groups */
+  .groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+  .group-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .group-card h4 { margin: 0; padding: 10px 12px; font-size: 13px; background: var(--panel-2); border-bottom: 1px solid var(--line); }
+  .group-card table { min-width: 0; font-size: 12.5px; }
+  .group-card td, .group-card th { padding: 6px 8px; }
+  .group-card tr.adv-1 td, .group-card tr.adv-2 td { background: rgba(91,140,255,.10); }
+  .group-card tr.adv-3 td { background: rgba(245,196,81,.08); }
+
+  .empty { color: var(--muted); font-size: 13px; padding: 24px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius); }
+  footer { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  code { background: var(--panel-2); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">🏆</div>
+    <div class="title">
+      <h1>World Cup 26 — Knockout Tracker</h1>
+      <p>Live bracket &amp; best third-placed standings · auto-updates from open match data</p>
+    </div>
+    <div class="spacer"></div>
+    <div class="controls">
+      <label class="toggle"><input type="checkbox" id="autoToggle" checked /> Auto-refresh</label>
+      <button id="refreshBtn" class="primary">↻ Refresh now</button>
+    </div>
+  </header>
+
+  <div class="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Starting up…</span>
+  </div>
+
+  <details class="settings" id="settings">
+    <summary>Data source &amp; settings</summary>
+    <div class="settings-body">
+      <div class="field"><label>Data URL (JSON)</label><input id="cfgUrl" /></div>
+      <div class="field"><label>Refresh (seconds)</label><input id="cfgInterval" /></div>
+      <div class="hint">
+        Default source is the open <a href="https://github.com/openfootball/worldcup.json" target="_blank" rel="noopener">openfootball</a>
+        World Cup 2026 dataset (served from GitHub with CORS, so it works straight from a local file — no server or API key).
+        It updates as results are recorded. You can point this at the
+        <code>2022</code> or <code>2018</code> dataset to see a completed tournament, or at your own fork.
+        Last good data is cached in your browser so the page still works offline.
+      </div>
+      <div class="settings-actions">
+        <button id="saveCfg" class="primary">Save &amp; reload</button>
+        <button id="resetCfg">Reset defaults</button>
+      </div>
+    </div>
+  </details>
+
+  <h2 class="section">Knockout Bracket <span class="tag" id="koTag"></span></h2>
+  <div class="bracket-scroll"><div class="bracket" id="bracket"></div></div>
+
+  <h2 class="section">Best Third-Placed Teams <span class="tag">top 8 of 12 advance to the Round of 32</span></h2>
+  <div id="thirdWrap"></div>
+  <div class="legend">
+    <span><span class="swatch" style="background:rgba(54,211,153,.5)"></span>Qualified (top 8)</span>
+    <span><span class="swatch" style="background:rgba(245,196,81,.45)"></span>On the bubble (7th–9th)</span>
+    <span>Tiebreakers: Pts → GD → GF → team conduct → FIFA ranking</span>
+  </div>
+
+  <h2 class="section">Group Stage <span class="tag" id="groupTag"></span></h2>
+  <div class="groups" id="groups"></div>
+
+  <footer>
+    Match data: <a href="https://github.com/openfootball/worldcup.json" target="_blank" rel="noopener">openfootball</a> (open data, public domain).
+    Group tables and the best-third-placed ranking are computed in-page from results using FIFA tiebreakers
+    (points, goal difference, goals scored, team conduct, FIFA ranking). Tables are provisional until all group matches finish.
+    Unofficial fan tool.
+    <div id="builtAt" style="margin-top:6px;"></div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ============================ Config ============================ */
+const OPENFOOTBALL_2026 = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json";
+const DEFAULTS = { url: OPENFOOTBALL_2026, interval: 60 };
+const LS_CFG = "wc26.cfg.v2";
+const LS_DATA = "wc26.lastData.v2";
+
+function loadCfg() {
+  try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(LS_CFG) || "{}")); }
+  catch { return { ...DEFAULTS }; }
+}
+function saveCfg(c) { localStorage.setItem(LS_CFG, JSON.stringify(c)); }
+let cfg = loadCfg();
+
+/* ============================ Flags ============================ */
+const FLAGS = {
+  "Algeria":"🇩🇿","Angola":"🇦🇴","Argentina":"🇦🇷","Australia":"🇦🇺","Austria":"🇦🇹","Bahrain":"🇧🇭",
+  "Belgium":"🇧🇪","Bolivia":"🇧🇴","Bosnia & Herzegovina":"🇧🇦","Bosnia and Herzegovina":"🇧🇦","Brazil":"🇧🇷",
+  "Cameroon":"🇨🇲","Canada":"🇨🇦","Cape Verde":"🇨🇻","Chile":"🇨🇱","Colombia":"🇨🇴","Congo DR":"🇨🇩",
+  "Costa Rica":"🇨🇷","Croatia":"🇭🇷","Curaçao":"🇨🇼","Curacao":"🇨🇼","Czech Republic":"🇨🇿","Czechia":"🇨🇿",
+  "Denmark":"🇩🇰","DR Congo":"🇨🇩","Ecuador":"🇪🇨","Egypt":"🇪🇬","England":"🏴󠁧󠁢󠁥󠁮󠁧󠁿","Finland":"🇫🇮",
+  "France":"🇫🇷","Gabon":"🇬🇦","Georgia":"🇬🇪","Germany":"🇩🇪","Ghana":"🇬🇭","Greece":"🇬🇷","Haiti":"🇭🇹",
+  "Honduras":"🇭🇳","Hungary":"🇭🇺","Iran":"🇮🇷","Iraq":"🇮🇶","Israel":"🇮🇱","Italy":"🇮🇹","Ivory Coast":"🇨🇮",
+  "Jamaica":"🇯🇲","Japan":"🇯🇵","Jordan":"🇯🇴","Korea Republic":"🇰🇷","Mali":"🇲🇱","Mexico":"🇲🇽",
+  "Morocco":"🇲🇦","Netherlands":"🇳🇱","New Zealand":"🇳🇿","Nigeria":"🇳🇬","Norway":"🇳🇴","Oman":"🇴🇲",
+  "Panama":"🇵🇦","Paraguay":"🇵🇾","Peru":"🇵🇪","Poland":"🇵🇱","Portugal":"🇵🇹","Qatar":"🇶🇦","Romania":"🇷🇴",
+  "Saudi Arabia":"🇸🇦","Scotland":"🏴󠁧󠁢󠁳󠁣󠁴󠁿","Senegal":"🇸🇳","Serbia":"🇷🇸","Slovakia":"🇸🇰","Slovenia":"🇸🇮",
+  "South Africa":"🇿🇦","South Korea":"🇰🇷","Spain":"🇪🇸","Sweden":"🇸🇪","Switzerland":"🇨🇭","Tunisia":"🇹🇳",
+  "Turkey":"🇹🇷","Türkiye":"🇹🇷","Ukraine":"🇺🇦","United Arab Emirates":"🇦🇪","United States":"🇺🇸",
+  "Uruguay":"🇺🇾","USA":"🇺🇸","Uzbekistan":"🇺🇿","Venezuela":"🇻🇪","Wales":"🏴󠁧󠁢󠁷󠁬󠁳󠁿"
+};
+const flagFor = (name) => FLAGS[(name || "").trim()] || null;
+
+/* ============================ Round mapping ============================ */
+// openfootball round-name strings -> our ordered knockout keys.
+const ROUND_NAME = {
+  "round of 32": "R32",
+  "round of 16": "R16",
+  "quarter-final": "QF", "quarter-finals": "QF", "quarterfinals": "QF",
+  "semi-final": "SF", "semi-finals": "SF", "semifinals": "SF",
+  "match for third place": "TP", "third place": "TP", "third-place play-off": "TP", "play-off for third place": "TP",
+  "final": "F",
+};
+const KO_DEFS = [
+  { key: "R32", name: "Round of 32",   slots: 16 },
+  { key: "R16", name: "Round of 16",   slots: 8 },
+  { key: "QF",  name: "Quarter-finals",slots: 4 },
+  { key: "SF",  name: "Semi-finals",   slots: 2 },
+  { key: "TP",  name: "Third place",   slots: 1 },
+  { key: "F",   name: "Final",         slots: 1 },
+];
+const KO_ORDER = KO_DEFS.map(d => d.key);
+
+function roundKeyFromName(round) {
+  const r = (round || "").trim().toLowerCase();
+  if (/^matchday/.test(r) || /^group/.test(r)) return null;
+  if (ROUND_NAME[r]) return ROUND_NAME[r];
+  // Loose fallback: more specific labels first so "final" doesn't swallow "semi-final".
+  if (/third|bronze/.test(r)) return "TP";
+  if (/quarter/.test(r)) return "QF";
+  if (/semi/.test(r)) return "SF";
+  if (/round of 16|eighth|1\/8/.test(r)) return "R16";
+  if (/round of 32|1\/16/.test(r)) return "R32";
+  if (/\bfinal\b/.test(r)) return "F";
+  return null;
+}
+
+/* ============================ Normalisation ============================
+ * openfootball match shape:
+ *   { round, date, time, team1, team2, group, score:{ ft:[h,a], ht, et:[h,a], p:[h,a] } }
+ * A match is "played" only when score.ft exists.
+ * ===================================================================== */
+function groupLetter(m) {
+  const g = (m.group || "").match(/group\s+([a-l])/i);
+  return g ? g[1].toUpperCase() : null;
+}
+function normalize(m) {
+  const s = m.score || null;
+  const played = !!(s && Array.isArray(s.ft));
+  // Final score for display/winner: extra-time aggregate if present, else full-time.
+  const disp = s && Array.isArray(s.et) ? s.et : (s && s.ft) ? s.ft : null;
+  const pens = s && Array.isArray(s.p) ? { h: s.p[0], a: s.p[1] } : null;
+  return {
+    home: m.team1, away: m.team2,
+    hs: disp ? disp[0] : null, as: disp ? disp[1] : null,
+    ftH: played ? s.ft[0] : null, ftA: played ? s.ft[1] : null,
+    played,
+    aet: !!(s && Array.isArray(s.et)),
+    pens,
+    group: groupLetter(m),
+    round: roundKeyFromName(m.round),
+    rawRound: m.round,
+    date: m.date || "", time: m.time || "",
+  };
+}
+
+// A knockout slot label is a placeholder (not a real team) when it has no flag
+// and looks like a seeding token: "W73", "3A/B/C/D/F", "Winner Group A", "RU Group B"...
+function isPlaceholder(name) {
+  const n = (name || "").trim();
+  if (!n) return true;
+  if (flagFor(n)) return false;
+  return /\b(w|l|ru|winner|runner|loser)\b/i.test(n) || /\d/.test(n) || /\//.test(n) || n.length <= 3;
+}
+
+/* ============================ Standings ============================ */
+function blankRow(team) { return { team, P:0, W:0, D:0, L:0, GF:0, GA:0, GD:0, Pts:0, conduct:0 }; }
+
+function computeGroup(matches) {
+  const rows = {};
+  const ensure = (t) => (rows[t] || (rows[t] = blankRow(t)));
+  for (const m of matches) {
+    ensure(m.home); ensure(m.away);
+    if (!m.played || m.ftH === null || m.ftA === null) continue;
+    const H = rows[m.home], A = rows[m.away], hs = m.ftH, as = m.ftA;
+    H.P++; A.P++; H.GF += hs; H.GA += as; A.GF += as; A.GA += hs;
+    if (hs > as) { H.W++; A.L++; H.Pts += 3; }
+    else if (hs < as) { A.W++; H.L++; A.Pts += 3; }
+    else { H.D++; A.D++; H.Pts++; A.Pts++; }
+  }
+  const arr = Object.values(rows);
+  arr.forEach(r => r.GD = r.GF - r.GA);
+  arr.sort(cmpTeam);
+  arr.forEach((r, i) => r.rank = i + 1);
+  return arr;
+}
+// FIFA order: Pts, GD, GF, conduct (we lack card data -> 0), then name as a stable last resort.
+function cmpTeam(a, b) {
+  return (b.Pts - a.Pts) || (b.GD - a.GD) || (b.GF - a.GF) ||
+         (b.conduct - a.conduct) || a.team.localeCompare(b.team);
+}
+
+/* ============================ Parse ============================ */
+function parse(raw) {
+  const matches = (raw && Array.isArray(raw.matches) ? raw.matches : []).map(normalize);
+  const groups = {};
+  const ko = {};
+  for (const m of matches) {
+    if (m.group && m.round === null) (groups[m.group] || (groups[m.group] = [])).push(m);
+    else if (m.round) (ko[m.round] || (ko[m.round] = [])).push(m);
+  }
+  const groupTables = {};
+  const thirds = [];
+  Object.keys(groups).sort().forEach(L => {
+    const t = computeGroup(groups[L]);
+    groupTables[L] = t;
+    if (t[2] && t[2].P > 0) thirds.push({ ...t[2], group: L });
+  });
+  thirds.sort(cmpTeam);
+  thirds.forEach((t, i) => { t.rank = i + 1; t.qualified = i < 8; });
+  return { groupTables, thirds, ko };
+}
+
+/* ============================ Rendering (pure -> HTML strings) ============================ */
+function esc(s) { return (s || "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+function gd(n) { return n > 0 ? "+" + n : String(n); }
+function fmtDate(d) {
+  if (!d) return "";
+  const t = new Date(d + "T00:00:00");
+  return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function teamRow(name, score, win) {
+  const ph = isPlaceholder(name);
+  const fl = flagFor(name);
+  const cls = ["team-row", win ? "win" : "", ph ? "tbd" : ""].filter(Boolean).join(" ");
+  return `<div class="${cls}"><span class="flag">${ph ? "·" : (fl || "🏳️")}</span>` +
+         `<span class="nm">${esc(name || "TBD")}</span>` +
+         `<span class="sc">${score === null || score === undefined ? "" : score}</span></div>`;
+}
+
+function tieHTML(m, isFinal) {
+  let hWin = false, aWin = false;
+  if (m.played) {
+    if (m.pens) { hWin = m.pens.h > m.pens.a; aWin = m.pens.a > m.pens.h; }
+    else if (m.hs > m.as) hWin = true;
+    else if (m.as > m.hs) aWin = true;
+  }
+  const when = fmtDate(m.date);
+  const statusLabel = m.played ? (m.aet ? (m.pens ? "PENS" : "AET") : "FT") : (when || "TBD");
+  return `<div class="tie${isFinal ? " final-tie" : ""}">
+      <div class="meta"><span>${esc(when)}</span><span>${esc(statusLabel)}</span></div>
+      ${teamRow(m.home, m.played ? m.hs : null, hWin)}
+      ${teamRow(m.away, m.played ? m.as : null, aWin)}
+      ${m.pens ? `<div class="pens">pens ${m.pens.h}–${m.pens.a}</div>` : ""}
+    </div>`;
+}
+function placeholderTie() {
+  return `<div class="tie"><div class="meta"><span>—</span><span>TBD</span></div>
+      ${teamRow("", null, false)}${teamRow("", null, false)}</div>`;
+}
+
+function bracketHTML(ko) {
+  let anyKO = false;
+  const cols = KO_DEFS.map(def => {
+    const matches = (ko[def.key] || []).slice().sort(byDate);
+    if (matches.length) anyKO = true;
+    let ties = matches.map(m => tieHTML(m, def.key === "F"));
+    while (ties.length < def.slots) ties.push(placeholderTie());
+    return `<div class="round-col"><h3>${def.name}</h3><div class="ties">${ties.join("")}</div></div>`;
+  }).join("");
+  return { html: cols, anyKO };
+}
+
+function thirdHTML(thirds) {
+  if (!thirds.length)
+    return `<div class="empty">No completed group matches yet — the third-place standings populate automatically as results come in.</div>`;
+  const rows = thirds.map(t => {
+    let cls = t.qualified ? "qual" : "out";
+    if (t.rank >= 7 && t.rank <= 9) cls = t.qualified ? "qual bubble" : "bubble";
+    return `<tr class="${cls}">
+      <td class="pos">${t.rank}</td>
+      <td class="team"><span class="flag-cell"><span class="flag">${flagFor(t.team) || "🏳️"}</span>${esc(t.team)}</span></td>
+      <td>${t.group}</td><td>${t.P}</td><td>${t.W}</td><td>${t.D}</td><td>${t.L}</td>
+      <td>${t.GF}</td><td>${t.GA}</td><td>${gd(t.GD)}</td><td class="pts">${t.Pts}</td></tr>`;
+  }).join("");
+  return `<div class="tbl-wrap"><table>
+      <thead><tr><th>#</th><th class="team">Team</th><th>Grp</th>
+      <th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+function groupsHTML(groupTables) {
+  const letters = Object.keys(groupTables).sort();
+  if (!letters.length) return { html: `<div class="empty">Waiting for group-stage fixtures…</div>`, count: 0 };
+  const html = letters.map(L => {
+    const rows = groupTables[L].map(r => {
+      const cls = r.rank <= 2 ? `adv-${r.rank}` : (r.rank === 3 ? "adv-3" : "");
+      return `<tr class="${cls}"><td class="pos">${r.rank}</td>
+        <td class="team"><span class="flag-cell"><span class="flag">${flagFor(r.team) || "🏳️"}</span>${esc(r.team)}</span></td>
+        <td>${r.P}</td><td>${gd(r.GD)}</td><td class="pts">${r.Pts}</td></tr>`;
+    }).join("");
+    return `<div class="group-card"><h4>Group ${L}</h4><table>
+        <thead><tr><th>#</th><th class="team">Team</th><th>P</th><th>GD</th><th>Pts</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+  }).join("");
+  return { html, count: letters.length };
+}
+
+function byDate(a, b) {
+  return String(a.date).localeCompare(String(b.date)) || String(a.time).localeCompare(String(b.time));
+}
+
+/* ============================ Mount + loop ============================ */
+const $ = (id) => document.getElementById(id);
+let timer = null;
+
+function setStatus(kind, text) {
+  $("statusDot").className = "dot" + (kind ? " " + kind : "");
+  $("statusText").textContent = text;
+}
+
+function render(parsed) {
+  const b = bracketHTML(parsed.ko);
+  $("bracket").innerHTML = b.html;
+  $("koTag").textContent = b.anyKO ? "" : "begins after the group stage — fixtures appear here automatically";
+  $("thirdWrap").innerHTML = thirdHTML(parsed.thirds);
+  const g = groupsHTML(parsed.groupTables);
+  $("groups").innerHTML = g.html;
+  $("groupTag").textContent = g.count ? `${g.count} of 12 groups` : "";
+}
+
+async function update() {
+  setStatus("", "Fetching latest results…");
+  try {
+    const res = await fetch(cfg.url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.json();
+    localStorage.setItem(LS_DATA, JSON.stringify({ at: Date.now(), raw }));
+    render(parse(raw));
+    const played = (raw.matches || []).filter(m => m.score && m.score.ft).length;
+    setStatus("live", `Live · updated ${new Date().toLocaleTimeString()} · ${played} matches played`);
+  } catch (err) {
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(LS_DATA) || "null"); } catch {}
+    if (cached && cached.raw) {
+      render(parse(cached.raw));
+      setStatus("cache", `Couldn't reach the data source (${err.message}). Showing cached data from ${new Date(cached.at).toLocaleString()}.`);
+    } else {
+      render(parse({ matches: [] }));
+      setStatus("err", `Couldn't load data: ${err.message}. Check the data URL in settings, then Refresh.`);
+    }
+  }
+}
+
+function startTimer() {
+  if (timer) clearInterval(timer);
+  const secs = Math.max(15, Number(cfg.interval) || 60);
+  if ($("autoToggle").checked) timer = setInterval(update, secs * 1000);
+}
+
+function applyCfgToInputs() { $("cfgUrl").value = cfg.url; $("cfgInterval").value = cfg.interval; }
+
+$("refreshBtn").addEventListener("click", update);
+$("autoToggle").addEventListener("change", startTimer);
+$("saveCfg").addEventListener("click", () => {
+  cfg = { url: $("cfgUrl").value.trim() || DEFAULTS.url, interval: Math.max(15, Number($("cfgInterval").value) || DEFAULTS.interval) };
+  saveCfg(cfg); startTimer(); update();
+});
+$("resetCfg").addEventListener("click", () => { cfg = { ...DEFAULTS }; saveCfg(cfg); applyCfgToInputs(); startTimer(); update(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) update(); });
+
+$("builtAt").textContent = "Tracker loaded " + new Date().toLocaleString();
+applyCfgToInputs();
+startTimer();
+update();
+
+// Expose pure logic for offline testing (no-op in the browser).
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { parse, computeGroup, cmpTeam, normalize, roundKeyFromName, bracketHTML, thirdHTML, groupsHTML, isPlaceholder };
+}
+</script>
+</body>
+</html>
