@@ -67,6 +67,23 @@
   .ties { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; flex: 1; }
   .tie { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
   .tie.final-tie { border-color: var(--gold); }
+  .team-row.prov .nm { font-style: italic; }
+  .team-row[data-pred-num] { cursor: pointer; }
+  .team-row[data-pred-num]:hover { background: rgba(91,140,255,.12); }
+  .team-row.pick { background: rgba(91,140,255,.16); }
+  .team-row.pick .nm { color: var(--blue); font-weight: 600; }
+  .team-row.pick .sc { color: var(--blue); }
+  .pick-badge { font-size: 9.5px; color: var(--blue); margin-left: 4px; flex: 0 0 auto; letter-spacing: .3px; }
+
+  .pred-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -2px 0 12px; font-size: 12.5px; color: var(--muted); }
+  .pred-bar .spacer { flex: 1 1 auto; }
+  .pred-hint strong { color: var(--blue); }
+  .pred-count { color: var(--blue); font-variant-numeric: tabular-nums; }
+  #clearPred { display: none; }
+  #clearPred.show { display: inline-block; }
+  .champ-line { font-size: 14px; font-weight: 600; color: var(--gold); margin: 0 0 12px; min-height: 0; }
+  .champ-line:empty { display: none; }
+  .champ-line .flag { margin: 0 3px; }
   .tie .meta { font-size: 10.5px; color: var(--muted); padding: 5px 9px 2px; display: flex; justify-content: space-between; }
   .team-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; font-size: 13px; border-top: 1px solid var(--line); }
   .team-row:first-of-type { border-top: none; }
@@ -164,6 +181,13 @@
   <div id="fixtures"></div>
 
   <h2 class="section">Knockout Bracket <span class="tag" id="koTag"></span></h2>
+  <div class="pred-bar">
+    <span class="pred-hint">🔮 <strong>Predict mode:</strong> click a team in any upcoming tie to send them through — picks cascade to the next round.</span>
+    <span class="spacer"></span>
+    <span id="predCount" class="pred-count"></span>
+    <button id="clearPred">Clear predictions</button>
+  </div>
+  <div id="champLine" class="champ-line"></div>
   <div class="bracket-scroll"><div class="bracket" id="bracket"></div></div>
 
   <h2 class="section">Best Third-Placed Teams <span class="tag">top 8 of 12 advance to the Round of 32</span></h2>
@@ -280,6 +304,7 @@ function normalize(m) {
     group: groupLetter(m),
     round: roundKeyFromName(m.round),
     rawRound: m.round,
+    num: (m.num != null ? Number(m.num) : null),
     date: m.date || "", time: m.time || "",
   };
 }
@@ -338,7 +363,11 @@ function parse(raw) {
   });
   thirds.sort(cmpTeam);
   thirds.forEach((t, i) => { t.rank = i + 1; t.qualified = i < 8; });
-  return { groupTables, thirds, ko, matches };
+  // Index every knockout match by its fixture number so "W74"/"L101" slot
+  // references can be resolved (and predictions cascaded) through the bracket.
+  const koByNum = {};
+  for (const m of matches) if (m.round && m.num != null) koByNum[m.num] = m;
+  return { groupTables, thirds, ko, matches, koByNum };
 }
 
 /* ============================ Rendering (pure -> HTML strings) ============================ */
@@ -359,37 +388,127 @@ function teamRow(name, score, win) {
          `<span class="sc">${score === null || score === undefined ? "" : score}</span></div>`;
 }
 
-function tieHTML(m, isFinal) {
-  let hWin = false, aWin = false;
-  if (m.played) {
-    if (m.pens) { hWin = m.pens.h > m.pens.a; aWin = m.pens.a > m.pens.h; }
-    else if (m.hs > m.as) hWin = true;
-    else if (m.as > m.hs) aWin = true;
-  }
-  const when = fmtDate(m.date);
-  const statusLabel = m.played ? (m.aet ? (m.pens ? "PENS" : "AET") : "FT") : (when || "TBD");
-  return `<div class="tie${isFinal ? " final-tie" : ""}">
-      <div class="meta"><span>${esc(when)}</span><span>${esc(statusLabel)}</span></div>
-      ${teamRow(m.home, m.played ? m.hs : null, hWin)}
-      ${teamRow(m.away, m.played ? m.as : null, aWin)}
-      ${m.pens ? `<div class="pens">pens ${m.pens.h}–${m.pens.a}</div>` : ""}
-    </div>`;
-}
 function placeholderTie() {
   return `<div class="tie"><div class="meta"><span>—</span><span>TBD</span></div>
       ${teamRow("", null, false)}${teamRow("", null, false)}</div>`;
 }
 
-function bracketHTML(ko) {
+/* ---- Bracket slot resolution + predictions ----
+ * Knockout slots reference earlier matches ("W74" = winner of match 74,
+ * "L101" = loser of 101) or group positions ("1I", "2K"). We resolve each to a
+ * concrete team using, in priority order: the real result if the feeder match
+ * is finished, otherwise the user's prediction, otherwise the standings (for
+ * 1X/2X). Each resolved slot carries a "kind" that drives styling:
+ *   team      – decided by an actual result (locked)
+ *   team-prov – provisional, from current standings (1X / 2X)
+ *   pred      – the user's prediction
+ *   slot/tbd  – still unknown (placeholder token)
+ */
+function winnerSide(mm) {
+  if (!mm || !mm.played) return null;
+  if (mm.pens) return mm.pens.h > mm.pens.a ? "h" : (mm.pens.a > mm.pens.h ? "a" : null);
+  if (mm.hs > mm.as) return "h";
+  if (mm.as > mm.hs) return "a";
+  return null;
+}
+function resolveTeams(mm, ctx, seen) {
+  return { home: resolveToken(mm.home, ctx, seen), away: resolveToken(mm.away, ctx, seen) };
+}
+function resolveOutcome(num, want, ctx, seen) {
+  // want: "W" or "L". Returns {name, kind}.
+  const tag = want + num;
+  if (seen.has(tag)) return { name: tag, kind: "slot" };
+  const seen2 = new Set(seen); seen2.add(tag);
+  const mm = ctx.koByNum[num];
+  if (!mm) return { name: tag, kind: "slot" };
+  const teams = resolveTeams(mm, ctx, seen2);
+  const side = winnerSide(mm);
+  if (mm.played && side) {
+    const win = side === "h" ? teams.home : teams.away;
+    const lose = side === "h" ? teams.away : teams.home;
+    const out = want === "W" ? win : lose;
+    if (out.kind !== "slot" && out.kind !== "tbd") return { name: out.name, kind: "team" };
+  }
+  const pick = ctx.predictions[num];
+  if (pick && (pick === teams.home.name || pick === teams.away.name)) {
+    const out = want === "W" ? pick : (pick === teams.home.name ? teams.away.name : teams.home.name);
+    if (out && isRealTeamName(out)) return { name: out, kind: "pred" };
+  }
+  return { name: tag, kind: "slot" };
+}
+function isRealTeamName(n) { return !!flagFor(n); }
+function resolveToken(tok, ctx, seen) {
+  tok = (tok || "").trim();
+  if (!tok) return { name: "", kind: "tbd" };
+  if (isRealTeamName(tok)) return { name: tok, kind: "team" };
+  let m;
+  if ((m = tok.match(/^W(\d+)$/))) return resolveOutcome(+m[1], "W", ctx, seen);
+  if ((m = tok.match(/^L(\d+)$/))) return resolveOutcome(+m[1], "L", ctx, seen);
+  if ((m = tok.match(/^([12])([A-L])$/i))) {
+    const tbl = ctx.groupTables[m[2].toUpperCase()];
+    const r = tbl && tbl[(+m[1]) - 1];
+    if (r && r.P > 0) return { name: r.team, kind: "team-prov" };
+  }
+  return { name: tok, kind: "slot" };
+}
+
+function koTeamRow(num, resolved, score, opts) {
+  const ph = resolved.kind === "slot" || resolved.kind === "tbd";
+  const name = resolved.name || "TBD";
+  const cls = ["team-row", opts.win ? "win" : "", opts.pick ? "pick" : "",
+    ph ? "tbd" : "", resolved.kind === "team-prov" ? "prov" : ""].filter(Boolean).join(" ");
+  const attrs = opts.clickable
+    ? ` data-pred-num="${num}" data-pred-team="${esc(name)}" role="button" tabindex="0" title="Predict ${esc(name)} to advance"`
+    : "";
+  return `<div class="${cls}"${attrs}>` +
+    `<span class="flag">${ph ? "·" : (flagFor(name) || "🏳️")}</span>` +
+    `<span class="nm">${esc(name)}</span>` +
+    `<span class="sc">${score === null || score === undefined ? "" : score}</span>` +
+    `${opts.pick ? '<span class="pick-badge">✓ pick</span>' : ""}</div>`;
+}
+
+function koTieHTML(mm, ctx) {
+  const teams = resolveTeams(mm, ctx, new Set());
+  const side = winnerSide(mm);
+  const pick = ctx.predictions[mm.num];
+  const open = !mm.played;
+  const named = (t) => t.kind === "team" || t.kind === "pred" || t.kind === "team-prov";
+  const homePick = open && pick && pick === teams.home.name && named(teams.home);
+  const awayPick = open && pick && pick === teams.away.name && named(teams.away);
+  const when = fmtDate(mm.date);
+  const status = mm.played ? (mm.aet ? (mm.pens ? "PENS" : "AET") : "FT")
+    : ((homePick || awayPick) ? "your pick" : (when || "TBD"));
+  return `<div class="tie${mm.round === "F" ? " final-tie" : ""}">
+      <div class="meta"><span>${esc(when)}</span><span>${esc(status)}</span></div>
+      ${koTeamRow(mm.num, teams.home, mm.played ? mm.hs : null,
+        { win: side === "h", pick: homePick, clickable: open && named(teams.home) })}
+      ${koTeamRow(mm.num, teams.away, mm.played ? mm.as : null,
+        { win: side === "a", pick: awayPick, clickable: open && named(teams.away) })}
+      ${mm.pens ? `<div class="pens">pens ${mm.pens.h}–${mm.pens.a}</div>` : ""}
+    </div>`;
+}
+
+function bracketHTML(ctx) {
+  const byRound = {};
   let anyKO = false;
+  Object.values(ctx.koByNum).forEach(mm => { (byRound[mm.round] || (byRound[mm.round] = [])).push(mm); anyKO = true; });
   const cols = KO_DEFS.map(def => {
-    const matches = (ko[def.key] || []).slice().sort(byDate);
-    if (matches.length) anyKO = true;
-    let ties = matches.map(m => tieHTML(m, def.key === "F"));
+    const matches = (byRound[def.key] || []).slice().sort((a, b) => (a.num || 0) - (b.num || 0));
+    let ties = matches.map(mm => koTieHTML(mm, ctx));
     while (ties.length < def.slots) ties.push(placeholderTie());
     return `<div class="round-col"><h3>${def.name}</h3><div class="ties">${ties.join("")}</div></div>`;
   }).join("");
   return { html: cols, anyKO };
+}
+
+// Resolved champion (actual or predicted) for the banner under the bracket.
+function championLine(ctx) {
+  const champ = resolveOutcome(104, "W", ctx, new Set());
+  if (champ.kind === "team")
+    return `🏆 <span class="flag">${flagFor(champ.name) || "🏳️"}</span> ${esc(champ.name)} are World Champions`;
+  if (champ.kind === "pred")
+    return `🔮 Your predicted champion: <span class="flag">${flagFor(champ.name) || "🏳️"}</span> ${esc(champ.name)}`;
+  return "";
 }
 
 function thirdHTML(thirds) {
@@ -477,6 +596,28 @@ function fixturesHTML(matches, nowMs) {
 /* ============================ Mount + loop ============================ */
 const $ = (id) => document.getElementById(id);
 let timer = null;
+let lastParsed = null;
+
+/* ---- Predictions state (persisted) ---- */
+const LS_PRED = "wc26.predictions.v1";
+function loadPredictions() { try { return JSON.parse(localStorage.getItem(LS_PRED) || "{}") || {}; } catch { return {}; } }
+function savePredictions() { localStorage.setItem(LS_PRED, JSON.stringify(predictions)); }
+let predictions = loadPredictions();
+
+function predCtx() {
+  return { groupTables: lastParsed.groupTables, koByNum: lastParsed.koByNum, predictions };
+}
+function renderBracket() {
+  if (!lastParsed) return;
+  const ctx = predCtx();
+  const b = bracketHTML(ctx);
+  $("bracket").innerHTML = b.html;
+  $("koTag").textContent = b.anyKO ? "" : "begins after the group stage — fixtures appear here automatically";
+  $("champLine").innerHTML = championLine(ctx);
+  const n = Object.keys(predictions).length;
+  $("predCount").textContent = n ? `${n} prediction${n === 1 ? "" : "s"}` : "";
+  $("clearPred").classList.toggle("show", n > 0);
+}
 
 function setStatus(kind, text) {
   $("statusDot").className = "dot" + (kind ? " " + kind : "");
@@ -484,12 +625,11 @@ function setStatus(kind, text) {
 }
 
 function render(parsed) {
+  lastParsed = parsed;
   const fx = fixturesHTML(parsed.matches, Date.now());
   $("fixtures").innerHTML = fx.html;
   $("fxTag").textContent = fx.total ? "scores update live" : "no fixtures in this window";
-  const b = bracketHTML(parsed.ko);
-  $("bracket").innerHTML = b.html;
-  $("koTag").textContent = b.anyKO ? "" : "begins after the group stage — fixtures appear here automatically";
+  renderBracket();
   $("thirdWrap").innerHTML = thirdHTML(parsed.thirds);
   const g = groupsHTML(parsed.groupTables);
   $("groups").innerHTML = g.html;
@@ -536,6 +676,35 @@ $("saveCfg").addEventListener("click", () => {
 $("resetCfg").addEventListener("click", () => { cfg = { ...DEFAULTS }; saveCfg(cfg); applyCfgToInputs(); startTimer(); update(); });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) update(); });
 
+/* ---- Prediction interactions ---- */
+function togglePrediction(num, team) {
+  if (predictions[num] === team) delete predictions[num];
+  else predictions[num] = team;
+  // Drop downstream predictions that no longer match a team still in their tie.
+  const ctx = predCtx();
+  for (const k of Object.keys(predictions)) {
+    const mm = ctx.koByNum[k];
+    if (!mm) { delete predictions[k]; continue; }
+    const t = resolveTeams(mm, ctx, new Set());
+    if (predictions[k] !== t.home.name && predictions[k] !== t.away.name) delete predictions[k];
+  }
+  savePredictions();
+  renderBracket();
+}
+$("bracket").addEventListener("click", (e) => {
+  const row = e.target.closest("[data-pred-num]");
+  if (!row) return;
+  togglePrediction(row.getAttribute("data-pred-num"), row.getAttribute("data-pred-team"));
+});
+$("bracket").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const row = e.target.closest("[data-pred-num]");
+  if (!row) return;
+  e.preventDefault();
+  togglePrediction(row.getAttribute("data-pred-num"), row.getAttribute("data-pred-team"));
+});
+$("clearPred").addEventListener("click", () => { predictions = {}; savePredictions(); renderBracket(); });
+
 $("builtAt").textContent = "Tracker loaded " + new Date().toLocaleString();
 applyCfgToInputs();
 startTimer();
@@ -543,7 +712,7 @@ update();
 
 // Expose pure logic for offline testing (no-op in the browser).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parse, computeGroup, cmpTeam, normalize, roundKeyFromName, bracketHTML, thirdHTML, groupsHTML, isPlaceholder, fixturesHTML, utcKey };
+  module.exports = { parse, computeGroup, cmpTeam, normalize, roundKeyFromName, bracketHTML, thirdHTML, groupsHTML, isPlaceholder, fixturesHTML, utcKey, resolveToken, resolveOutcome, resolveTeams, championLine };
 }
 </script>
 </body>
