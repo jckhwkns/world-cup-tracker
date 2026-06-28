@@ -67,9 +67,14 @@
   /* Equal flex "slots" per column + each tie centered in its slot => an R16
      chip sits exactly at the midpoint of its two R32 feeders, at every round. */
   .ties { display: flex; flex-direction: column; gap: 0; flex: 1; }
-  .slot { flex: 1 1 0; display: flex; flex-direction: column; justify-content: center; padding: 5px 0; min-height: 0; }
+  /* grow to share spare height, but never shrink below the tie's own height
+     (so chips keep their content). Uniform tie height keeps columns aligned. */
+  .slot { flex: 1 0 auto; display: flex; flex-direction: column; justify-content: center; padding: 6px 0; }
   .tie { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
   .tie.final-tie { border-color: var(--gold); }
+  .tie[data-feed] { cursor: help; }
+  .tie.feeder-hl { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(91,140,255,.45), var(--shadow); }
+  .tie.feeder-src { border-color: var(--blue); }
   .team-row.prov .nm { font-style: italic; }
   .team-row[data-pred-num] { cursor: pointer; }
   .team-row[data-pred-num]:hover { background: rgba(91,140,255,.12); }
@@ -484,7 +489,14 @@ function koTieHTML(mm, ctx) {
   const status = mm.played
     ? (mm.pens ? `PENS ${mm.pens.h}–${mm.pens.a}` : (mm.aet ? "AET" : "FT"))
     : ((homePick || awayPick) ? "your pick" : (when || "TBD"));
-  return `<div class="slot"><div class="tie${mm.round === "F" ? " final-tie" : ""}">
+  // Feeder games for any side that isn't a set team yet (so hovering this tie
+  // can highlight the upstream match(es) that still need to resolve into it).
+  const refNum = (tok) => { const m = (tok || "").match(/^[WL](\d+)$/); return m ? +m[1] : null; };
+  const feeders = [];
+  if (teams.home.kind === "slot") { const r = refNum(mm.home); if (r) feeders.push(r); }
+  if (teams.away.kind === "slot") { const r = refNum(mm.away); if (r) feeders.push(r); }
+  const feedAttr = feeders.length ? ` data-feed="${feeders.join(",")}"` : "";
+  return `<div class="slot"><div class="tie${mm.round === "F" ? " final-tie" : ""}" data-num="${mm.num}"${feedAttr}>
       <div class="meta"><span>${esc(when)}</span><span>${esc(status)}</span></div>
       ${koTeamRow(mm.num, teams.home, mm.played ? mm.hs : null,
         { win: side === "h", pick: homePick, clickable: open && named(teams.home) })}
@@ -735,6 +747,22 @@ $("bracket").addEventListener("keydown", (e) => {
   togglePrediction(row.getAttribute("data-pred-num"), row.getAttribute("data-pred-team"));
 });
 $("clearPred").addEventListener("click", () => { predictions = {}; savePredictions(); renderBracket(); });
+
+/* ---- Hover: highlight the upstream game(s) that feed a not-yet-set tie ---- */
+function clearFeederHL() {
+  $("bracket").querySelectorAll(".feeder-hl, .feeder-src").forEach(el => el.classList.remove("feeder-hl", "feeder-src"));
+}
+$("bracket").addEventListener("mouseover", (e) => {
+  const tie = e.target.closest(".tie");
+  clearFeederHL();
+  if (!tie || !tie.hasAttribute("data-feed")) return;
+  tie.classList.add("feeder-src");
+  tie.getAttribute("data-feed").split(",").filter(Boolean).forEach(n => {
+    const el = $("bracket").querySelector(`.tie[data-num="${n}"]`);
+    if (el) el.classList.add("feeder-hl");
+  });
+});
+$("bracket").addEventListener("mouseleave", clearFeederHL);
 
 $("builtAt").textContent = "Tracker loaded " + new Date().toLocaleString();
 applyCfgToInputs();
