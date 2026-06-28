@@ -64,7 +64,10 @@
   .round-col { display: flex; flex-direction: column; min-width: 196px; }
   .round-col h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
     margin: 0 0 10px; text-align: center; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-  .ties { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; flex: 1; }
+  /* Equal flex "slots" per column + each tie centered in its slot => an R16
+     chip sits exactly at the midpoint of its two R32 feeders, at every round. */
+  .ties { display: flex; flex-direction: column; gap: 0; flex: 1; }
+  .slot { flex: 1 1 0; display: flex; flex-direction: column; justify-content: center; padding: 5px 0; min-height: 0; }
   .tie { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
   .tie.final-tie { border-color: var(--gold); }
   .team-row.prov .nm { font-style: italic; }
@@ -389,8 +392,8 @@ function teamRow(name, score, win) {
 }
 
 function placeholderTie() {
-  return `<div class="tie"><div class="meta"><span>—</span><span>TBD</span></div>
-      ${teamRow("", null, false)}${teamRow("", null, false)}</div>`;
+  return `<div class="slot"><div class="tie"><div class="meta"><span>—</span><span>TBD</span></div>
+      ${teamRow("", null, false)}${teamRow("", null, false)}</div></div>`;
 }
 
 /* ---- Bracket slot resolution + predictions ----
@@ -476,25 +479,53 @@ function koTieHTML(mm, ctx) {
   const homePick = open && pick && pick === teams.home.name && named(teams.home);
   const awayPick = open && pick && pick === teams.away.name && named(teams.away);
   const when = fmtDate(mm.date);
-  const status = mm.played ? (mm.aet ? (mm.pens ? "PENS" : "AET") : "FT")
+  // Keep every tie a uniform height (so slots align): penalties go in the meta
+  // line rather than a separate row.
+  const status = mm.played
+    ? (mm.pens ? `PENS ${mm.pens.h}–${mm.pens.a}` : (mm.aet ? "AET" : "FT"))
     : ((homePick || awayPick) ? "your pick" : (when || "TBD"));
-  return `<div class="tie${mm.round === "F" ? " final-tie" : ""}">
+  return `<div class="slot"><div class="tie${mm.round === "F" ? " final-tie" : ""}">
       <div class="meta"><span>${esc(when)}</span><span>${esc(status)}</span></div>
       ${koTeamRow(mm.num, teams.home, mm.played ? mm.hs : null,
         { win: side === "h", pick: homePick, clickable: open && named(teams.home) })}
       ${koTeamRow(mm.num, teams.away, mm.played ? mm.as : null,
         { win: side === "a", pick: awayPick, clickable: open && named(teams.away) })}
-      ${mm.pens ? `<div class="pens">pens ${mm.pens.h}–${mm.pens.a}</div>` : ""}
-    </div>`;
+    </div></div>`;
+}
+
+// Order each round so that the two feeders of every later-round match are
+// adjacent in the previous column. We walk the bracket tree from the final,
+// following each match's "W##"/"L##" slot references (which encode the
+// structure), so an R16 chip lands exactly between its two R32 parents.
+function bracketOrder(koByNum) {
+  const ref = (tok) => { const m = (tok || "").match(/^[WL](\d+)$/); return m ? +m[1] : null; };
+  const order = { R32: [], R16: [], QF: [], SF: [], TP: [], F: [] };
+  const seen = new Set();
+  const root = Object.values(koByNum).find(m => m.round === "F");
+  (function visit(num) {
+    const mm = num != null && koByNum[num];
+    if (!mm || seen.has(num)) return;
+    seen.add(num);
+    if (order[mm.round]) order[mm.round].push(num);
+    const a = ref(mm.home), b = ref(mm.away);
+    visit(a); visit(b);
+  })(root && root.num);
+  // Append anything not reached by the walk (played matches whose tokens became
+  // real names, the third-place match, or non-WC datasets), in num order.
+  Object.values(koByNum)
+    .filter(mm => !seen.has(mm.num) && order[mm.round])
+    .sort((a, b) => (a.num || 0) - (b.num || 0))
+    .forEach(mm => order[mm.round].push(mm.num));
+  return order;
 }
 
 function bracketHTML(ctx) {
-  const byRound = {};
+  const order = bracketOrder(ctx.koByNum);
   let anyKO = false;
-  Object.values(ctx.koByNum).forEach(mm => { (byRound[mm.round] || (byRound[mm.round] = [])).push(mm); anyKO = true; });
   const cols = KO_DEFS.map(def => {
-    const matches = (byRound[def.key] || []).slice().sort((a, b) => (a.num || 0) - (b.num || 0));
-    let ties = matches.map(mm => koTieHTML(mm, ctx));
+    const nums = order[def.key] || [];
+    if (nums.length) anyKO = true;
+    let ties = nums.map(n => koTieHTML(ctx.koByNum[n], ctx));
     while (ties.length < def.slots) ties.push(placeholderTie());
     return `<div class="round-col"><h3>${def.name}</h3><div class="ties">${ties.join("")}</div></div>`;
   }).join("");
